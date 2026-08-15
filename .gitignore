@@ -1,0 +1,5 @@
+.arnes/
+.arnes/arnes.db
+node_modules/
+__pycache__/
+*.pyc
