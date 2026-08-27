@@ -1729,6 +1729,230 @@ class OsmaBrain:
                 break
         return package
 
+    # ---- TASK_CONTEXT: paquete compacto segun seccion #10 del protocolo OSMA/ARGOS ----
+    _TASK_CONTEXT_VERSION = "1.0"
+    _RISK_MARKERS = ("drop", "delete from", "truncate", "production", "deploy", "migra",
+                     "security", "secret", "password", "token", "rls", "permisos", "database")
+
+    def build_task_context(self, query, project=None, agent=None, max_tokens=6000,
+                            include_search_required=True, quest_id=None):
+        """Paquete TASK_CONTEXT compatible con la seccion #10 del protocolo.
+        Devuelve un dict (o string formateado si render=True) con secciones:
+        FACTS, RELEVANT_FILES, RELATED_DATABASE, KNOWN_DECISIONS, KNOWN_RISKS,
+        STALE_INFORMATION, CONFIDENCE, MISSING_INFORMATION.
+        Si la memoria no alcanza el umbral -> emite MEMORY MISS + search_required."""
+        def _tok(x):
+            return len(json.dumps(x, ensure_ascii=False)) // 4
+
+        def _is_fact(r):
+            return r.get("type") in ("discovery", "decision", "verdict", "pattern",
+                                     "recommendation", "preference")
+        def _is_decision(r):
+            return r.get("type") in ("decision", "verdict")
+        def _is_risk(r):
+            content = (r.get("content") or "").lower()
+            return any(m in content for m in self._RISK_MARKERS)
+        def _stale(r):
+            try:
+                base = float(r.get("decay_base")) if r.get("decay_base") is not None else float(r.get("retrieval_strength", 0.6))
+            except Exception:
+                base = 0.6
+            return base < 0.3 or r.get("state") == "dormant" or r.get("state") == "archived"
+
+        pool = self.recall(query, agent=agent, limit=10)
+        direct = pool[:5]
+        seed_ids = [int(r["id"]) for r in direct]
+        act = self._spreading_activation(seed_ids, budget=8) if seed_ids else {}
+        associations = []
+        for nid, act_val in sorted(act.items(), key=lambda kv: kv[1], reverse=True):
+            if nid in seed_ids or len(associations) >= 8:
+                continue
+            row = self._conn.execute("SELECT * FROM observations WHERE id=?", (nid,)).fetchone()
+            if row:
+                d = dict(row)
+                d["activation"] = round(act_val, 4)
+                associations.append(d)
+
+        facts = [r for r in direct if _is_fact(r)]
+        relevant_files = []
+        seen_files = set()
+        for r in direct + associations:
+            tk = r.get("topic_key") or ""
+            if "/" in tk and not tk.startswith("osma/") and tk not in seen_files:
+                seen_files.add(tk)
+                relevant_files.append({
+                    "path": tk,
+                    "memory_id": r.get("id"),
+                    "confidence": round(float(r.get("confidence", 0.5)), 3),
+                })
+            if len(relevant_files) >= 6:
+                break
+        related_db = []
+        for r in direct + associations:
+            tags = r.get("tags") or ""
+            try:
+                tag_list = json.loads(tags) if tags else []
+            except Exception:
+                tag_list = []
+            if any(t in ("database", "migration", "schema", "tabla", "table") for t in tag_list):
+                related_db.append({
+                    "memory_id": r.get("id"),
+                    "topic_key": r.get("topic_key"),
+                    "summary": (r.get("content") or "")[:200],
+                    "confidence": round(float(r.get("confidence", 0.5)), 3),
+                })
+            if len(related_db) >= 4:
+                break
+        known_decisions = [
+            {"memory_id": r.get("id"), "topic_key": r.get("topic_key"),
+             "decision": (r.get("content") or "")[:240],
+             "confidence": round(float(r.get("confidence", 0.5)), 3)}
+            for r in pool if _is_decision(r)
+        ][:5]
+        known_risks = [
+            {"memory_id": r.get("id"), "topic_key": r.get("topic_key"),
+             "risk": (r.get("content") or "")[:240],
+             "confidence": round(float(r.get("confidence", 0.5)), 3)}
+            for r in (direct + associations) if _is_risk(r)
+        ][:4]
+        stale_information = [
+            {"memory_id": r.get("id"), "topic_key": r.get("topic_key"),
+             "state": r.get("state"), "summary": (r.get("content") or "")[:200]}
+            for r in (direct + associations) if _stale(r)
+        ][:4]
+
+        scored_pool = [r for r in (direct + associations) if r.get("confidence") is not None]
+        if scored_pool:
+            confidence = round(
+                sum(float(r.get("confidence", 0.5)) for r in scored_pool) / len(scored_pool), 3)
+        else:
+            confidence = 0.0
+
+        missing = []
+        miss_reasons = []
+        if confidence < 0.5:
+            miss_reasons.append("confianza %.2f < 0.5" % confidence)
+        if len(direct) < 2:
+            miss_reasons.append("solo %d memorias directas" % len(direct))
+        if miss_reasons:
+            missing.append({
+                "type": "MEMORY_MISS",
+                "reason": "; ".join(miss_reasons) if miss_reasons else None,
+            })
+        if not relevant_files:
+            missing.append({"type": "NO_FILE_CONTEXT", "reason": "topic_keys sin estructura de archivo"})
+        if not known_decisions:
+            missing.append({"type": "NO_DECISION_HISTORY", "reason": "sin memories tipo decision/verdict"})
+
+        search_required = []
+        if include_search_required and missing:
+            tokens = [t for t in re.findall(r"[a-zA-Z0-9_./-]{3,}", query) if t.lower() not in _OSMA_STOPWORDS][:5]
+            for t in tokens:
+                search_required.append({
+                    "SEARCH_REQUIRED": t,
+                    "TARGETS": ["src/", "migrations/", "docs/", "tests/"],
+                    "NO_FULL_REPOSITORY_SCAN": True,
+                })
+
+        package = {
+            "version": self._TASK_CONTEXT_VERSION,
+            "project": project or self._project_name(),
+            "query": query,
+            "quest_id": quest_id,
+            "generated_at": datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S"),
+            "FACTS": [{"memory_id": r.get("id"), "topic_key": r.get("topic_key"),
+                       "fact": (r.get("content") or "")[:240],
+                       "confidence": round(float(r.get("confidence", 0.5)), 3),
+                       "type": r.get("type")}
+                      for r in facts[:5]],
+            "RELEVANT_FILES": relevant_files,
+            "RELATED_DATABASE": related_db,
+            "KNOWN_DECISIONS": known_decisions,
+            "KNOWN_RISKS": known_risks,
+            "STALE_INFORMATION": stale_information,
+            "CONFIDENCE": confidence,
+            "MISSING_INFORMATION": missing,
+            "SEARCH_REQUIRED": search_required if include_search_required else [],
+            "stats": {
+                "direct_hits": len(direct),
+                "associations": len(associations),
+                "trimmed": False,
+                "estimated_tokens": _tok({"d": direct, "a": associations}),
+            },
+        }
+        if _tok(package) > max_tokens:
+            package = self._trim_task_context(package, max_tokens, _tok)
+        package["stats"]["estimated_tokens"] = _tok(package)
+        return package
+
+    def _trim_task_context(self, package, max_tokens, _tok):
+        """Orden de trim: SEARCH_REQUIRED, STALE, KNOWN_RISKS, RELATED_DATABASE,
+        ASSOCIATIONS (se reinyectan via campo aparte), RELEVANT_FILES, KNOWN_DECISIONS, FACTS."""
+        trim_order = ["SEARCH_REQUIRED", "STALE_INFORMATION", "KNOWN_RISKS",
+                      "RELATED_DATABASE", "RELEVANT_FILES", "KNOWN_DECISIONS", "FACTS"]
+        package["stats"]["trimmed"] = True
+        for k in trim_order:
+            while package.get(k) and _tok(package) > max_tokens:
+                package[k].pop()
+        return package
+
+    def render_task_context(self, package, max_chars=8000):
+        """Serializa el paquete TASK_CONTEXT a un bloque de texto para el system prompt.
+        Formato compatible con la seccion #10 del protocolo."""
+        lines = ["[TASK_CONTEXT]", "Version: %s" % package.get("version"),
+                 "Project: %s" % package.get("project"),
+                 "Query: %s" % (package.get("query") or "")[:200]]
+        if package.get("quest_id"):
+            lines.append("Quest: " + package["quest_id"])
+        lines.append("Confidence: %.3f" % float(package.get("CONFIDENCE", 0.0)))
+
+        if package.get("FACTS"):
+            lines.append("")
+            lines.append("FACTS:")
+            for f in package["FACTS"]:
+                lines.append("- [mem %s | %s | conf %.2f] %s" % (
+                    f.get("memory_id"), f.get("type", "?"), f.get("confidence", 0), f.get("fact", "")))
+        if package.get("RELEVANT_FILES"):
+            lines.append("")
+            lines.append("RELEVANT_FILES:")
+            for f in package["RELEVANT_FILES"]:
+                lines.append("- %s (mem %s, conf %.2f)" % (
+                    f.get("path"), f.get("memory_id"), f.get("confidence", 0)))
+        if package.get("RELATED_DATABASE"):
+            lines.append("")
+            lines.append("RELATED_DATABASE:")
+            for d in package["RELATED_DATABASE"]:
+                lines.append("- %s: %s" % (d.get("topic_key"), d.get("summary", "")))
+        if package.get("KNOWN_DECISIONS"):
+            lines.append("")
+            lines.append("KNOWN_DECISIONS:")
+            for d in package["KNOWN_DECISIONS"]:
+                lines.append("- %s: %s" % (d.get("topic_key"), d.get("decision", "")))
+        if package.get("KNOWN_RISKS"):
+            lines.append("")
+            lines.append("KNOWN_RISKS:")
+            for r in package["KNOWN_RISKS"]:
+                lines.append("- %s: %s" % (r.get("topic_key"), r.get("risk", "")))
+        if package.get("STALE_INFORMATION"):
+            lines.append("")
+            lines.append("STALE_INFORMATION:")
+            for s in package["STALE_INFORMATION"]:
+                lines.append("- [%s] %s: %s" % (s.get("state"), s.get("topic_key"), s.get("summary", "")))
+        if package.get("MISSING_INFORMATION"):
+            lines.append("")
+            lines.append("MISSING_INFORMATION:")
+            for m in package["MISSING_INFORMATION"]:
+                lines.append("- %s: %s" % (m.get("type"), m.get("reason", "")))
+        if package.get("SEARCH_REQUIRED"):
+            lines.append("")
+            lines.append("SEARCH_REQUIRED:")
+            for s in package["SEARCH_REQUIRED"]:
+                lines.append("- query='%s' targets=%s" % (s.get("SEARCH_REQUIRED"), s.get("TARGETS")))
+        out = "\n".join(lines)
+        if len(out) > max_chars:
+            out = out[:max_chars] + "\n..."
+        return out
+
     def osma_contradictions(self, status="open"):
         sql = ("SELECT c.*, a.topic_key AS topic_a, a.content AS content_a, a.agent AS agent_a, "
                "a.confidence AS conf_a, b.topic_key AS topic_b, b.content AS content_b, "
@@ -3704,6 +3928,20 @@ def _dispatch(brain, command):
         max_tokens = int(sys.argv[6]) if len(sys.argv) > 6 else 6000
         print(json.dumps(brain.osma_context(query, project=project, agent=agent, max_tokens=max_tokens),
                          ensure_ascii=False))
+
+    elif command == "task-context":
+        query = sys.argv[3]
+        project = sys.argv[4] if len(sys.argv) > 4 and sys.argv[4] != "-" else None
+        agent = sys.argv[5] if len(sys.argv) > 5 and sys.argv[5] != "-" else None
+        max_tokens = int(sys.argv[6]) if len(sys.argv) > 6 else 6000
+        quest_id = sys.argv[7] if len(sys.argv) > 7 and sys.argv[7] != "-" else None
+        render = (len(sys.argv) > 8 and sys.argv[8] == "render")
+        pkg = brain.build_task_context(query, project=project, agent=agent,
+                                       max_tokens=max_tokens, quest_id=quest_id)
+        if render:
+            print(brain.render_task_context(pkg))
+        else:
+            print(json.dumps(pkg, ensure_ascii=False, default=str))
 
     elif command == "osma-contradictions":
         st = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] != "-" else "open"

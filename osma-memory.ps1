@@ -19,72 +19,73 @@ El cerebro del harness. Guarda, busca y exporta recuerdos de los agentes.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet('init', 'save', 'search', 'recall', 'context', 'agent', 'get', 'update', 'reinforce', 'verify', 'reconsolidate', 'suggest-topic', 'revisions', 'compact', 'consolidate', 'consolidate-recent', 'checkpoint', 'capsule', 'continuity', 'cognitive-compact', 'aquest', 'atask', 'backup', 'export', 'import', 'stats', 'quest', 'quests', 'edge', 'edges', 'skill', 'route', 'reviews', 'experience', 'episode', 'patterns', 'analyze', 'osma-stats')]
-    [string]$Command,
+    [ValidateSet('init', 'save', 'search', 'recall', 'context', 'task-context', 'agent', 'get', 'update', 'reinforce', 'verify', 'reconsolidate', 'suggest-topic', 'revisions', 'compact', 'consolidate', 'consolidate-recent', 'checkpoint', 'capsule', 'continuity', 'cognitive-compact', 'aquest', 'atask', 'backup', 'export', 'import', 'stats', 'quest', 'quests', 'edge', 'edges', 'skill', 'route', 'reviews', 'experience', 'episode', 'patterns', 'analyze', 'osma-stats')]
+    [string]$Command
 
-    [string]$Agent,
-    [string]$Topic,
-    [ValidateSet('bugfix', 'decision', 'pattern', 'discovery', 'preference', 'verdict', 'recommendation', 'action', 'session_summary')]
-    [string]$Type = 'discovery',
-    [string]$Content,
-    [string]$Query,
-    [string]$QuestId,
-    [string]$Json,
-    [switch]$Quiet,   # salida JSON capturable (para que el chat cargue la memoria)
-    [switch]$Upsert,  # save: actualiza el topico si ya existe (en vez de duplicar)
-    [int]$Score = 0,  # save: importancia 1-5 (5 = critico, aparece primero)
-    [string[]]$Tags,  # save: etiquetas para filtrar (ej: -Tags schema,supabase)
-    [string]$Tag,     # search/recall: filtrar por etiqueta
-    [string]$Kind,    # save: working | episodic | semantic | procedural
-    [double]$Confidence = -1,   # save: 0-1 (default segun tipo)
-    [string]$Volatility = '',   # save: immutable | stable | slow | dynamic | ephemeral
-    [string]$Evidence,          # save/verify/reinforce: JSON de fuentes
-    [string]$Source,            # save: origen
-    [string]$Verdict,           # verify: PASS | FAIL
-    [int]$OlderThanDays = 30,  # compact: dias de antiguedad
-    [int]$Hours = 24,          # consolidate-recent: horas recientes
-    [int]$Id = 0,     # update/get/revisions/reinforce/verify/reconsolidate/capsule/continuity: id
-    [switch]$Create,  # checkpoint/aquest: crear
-    [switch]$List,    # checkpoint/aquest/atask: listar
-    [string]$Goal,            # checkpoint
-    [string]$Phase,           # checkpoint
-    [string[]]$Completed,     # checkpoint: tareas completadas
-    [string[]]$Pending,       # checkpoint: pendientes
-    [string[]]$Files,         # checkpoint: archivos activos
-    [string[]]$ModifiedFiles, # checkpoint: archivos modificados
-    [int[]]$Decisions,        # checkpoint: ids de memoria criticos
-    [string]$Skill,   # checkpoint: skill activa / skill: id
-    [string]$SkillAction = '', # skill: register | exec | link | status | executions
-    [string]$Stage,           # checkpoint: etapa de la skill
-    [string[]]$Blockers,      # checkpoint
-    [string[]]$Errors,        # checkpoint
-    [string]$TestState,       # checkpoint
-    [string]$BuildState,      # checkpoint
-    [string]$GitState,        # checkpoint
-    [string]$NextAction,      # checkpoint: SIGUIENTE ACCION EXACTA
-    [string]$Risk,    # route: texto de riesgo adicional
-    [string]$TaskId,  # atask: id de tarea (AUTH-03)
-    [string]$Status,  # atask: nuevo status
-    [int]$Attempts = 0,       # atask
-    [int]$TokensUsed = 0,     # atask
-    [string]$Summary,         # atask: resumen del resultado
-    [string[]]$TaskDeps,      # atask: dependencias
-    [string]$Acceptance,      # atask: criterios de aceptacion
-    [int]$Limit = 20,
-    [string]$OutDir,
-    [string]$InDir,
-    [switch]$Global  # Capa extra: memoria GLOBAL de patrones (~/.config/arnes/osma-global.db)
+    ,[string]$Agent
+    ,[string]$Topic
+    ,[ValidateSet('bugfix', 'decision', 'pattern', 'discovery', 'preference', 'verdict', 'recommendation', 'action', 'session_summary')]
+     [string]$Type = 'discovery'
+    ,[string]$Content
+    ,[string]$Query
+    ,[string]$QuestId
+    ,[string]$Json
+    ,[switch]$Quiet   # salida JSON capturable para que el chat cargue la memoria
+    ,[switch]$Upsert  # save: actualiza el topico si ya existe en vez de duplicar
+    ,[int]$Score = 0  # save: importancia 1-5, 5 = critico aparece primero
+    ,[string[]]$Tags  # save: etiquetas para filtrar, ej -Tags schema,supabase
+    ,[string]$Tag     # search/recall: filtrar por etiqueta
+    ,[string]$Kind    # save: working, episodic, semantic, procedural
+    ,[double]$Confidence = -1   # save: 0-1 default segun tipo
+    ,[string]$Volatility = ''   # save: immutable, stable, slow, dynamic, ephemeral
+    ,[string]$Evidence          # save/verify/reinforce: JSON de fuentes
+    ,[string]$Source            # save: origen
+    ,[string]$Verdict           # verify: PASS, FAIL
+    ,[int]$OlderThanDays = 30  # compact: dias de antiguedad
+    ,[int]$Hours = 24          # consolidate-recent: horas recientes
+    ,[int]$Id = 0     # update/get/revisions/reinforce/verify/reconsolidate/capsule/continuity: id
+    ,[switch]$Create  # checkpoint/aquest: crear
+    ,[switch]$List    # checkpoint/aquest/atask: listar
+    ,[string]$Goal            # checkpoint
+    ,[string]$Phase           # checkpoint
+    ,[string[]]$Completed     # checkpoint: tareas completadas
+    ,[string[]]$Pending       # checkpoint: pendientes
+    ,[string[]]$Files         # checkpoint: archivos activos
+    ,[string[]]$ModifiedFiles # checkpoint: archivos modificados
+    ,[int[]]$Decisions        # checkpoint: ids de memoria criticos
+    ,[string]$Skill   # checkpoint: skill activa, skill: id
+    ,[string]$SkillAction = '' # skill: register, exec, link, status, executions
+    ,[string]$Stage           # checkpoint: etapa de la skill
+    ,[string[]]$Blockers      # checkpoint
+    ,[string[]]$Errors        # checkpoint
+    ,[string]$TestState       # checkpoint
+    ,[string]$BuildState      # checkpoint
+    ,[string]$GitState        # checkpoint
+    ,[string]$NextAction      # checkpoint: SIGUIENTE ACCION EXACTA
+    ,[string]$Risk    # route: texto de riesgo adicional
+    ,[string]$TaskId  # atask: id de tarea, ej AUTH-03
+    ,[string]$Status  # atask: nuevo status
+    ,[int]$Attempts = 0       # atask
+    ,[int]$TokensUsed = 0     # atask
+    ,[string]$Summary         # atask: resumen del resultado
+    ,[string[]]$TaskDeps      # atask: dependencias
+    ,[string]$Acceptance      # atask: criterios de aceptacion
+    ,[int]$Limit = 20
+    ,[string]$OutDir
+    ,[string]$InDir
+    ,[switch]$Global  # Capa extra: memoria GLOBAL de patrones en home .config/arnes/osma-global.db
+    ,[switch]$Render  # task-context: renderiza el paquete como texto en lugar de JSON
     # --- OSMA V5+ Experiencia (experience) ---
     ,[string]$Situation   # experience record: situacion / parte del recuerdo
     ,[string]$Reasoning   # experience record: razonamiento
     ,[string]$Conclusion  # experience record: conclusion
     ,[string]$Action      # experience record: accion tomada
     ,[string]$Outcome     # experience record: resultado real
-    ,[double]$Reward = 0  # experience record: senal -1..1 (>=0.9 verified)
+    ,[double]$Reward = 0  # experience record: senal -1..1, mayor o igual 0.9 verified
     ,[string]$Project     # experience record: nombre del proyecto
     ,[string]$Cues        # cue-search: pistas separadas por comas
     ,[ValidateSet('record','search','cues','stats','validate','analyze')]
-    [string]$ExperienceAction = 'record'  # experience: subcomando
+     [string]$ExperienceAction = 'record'  # experience: subcomando
 )
 
 $ErrorActionPreference = 'Stop'
@@ -504,6 +505,40 @@ switch ($Command) {
         Write-Host ("  Contexto reciente: {0} observaciones" -f $results.Count) -ForegroundColor Cyan
         foreach ($r in ($results | Select-Object -First 10)) {
             Write-Host ('  [{0}] {1} | {2}' -f $r.id, $r.agent, $r.topic_key) -ForegroundColor White
+        }
+    }
+    'task-context' {
+        if (-not $Query) { throw 'Falta -Query' }
+        $projectArg = if ($Project) { $Project } else { '-' }
+        $agentArg = if ($Agent) { $Agent } else { '-' }
+        $questArg = if ($QuestId) { $QuestId } else { '-' }
+        $mode = if ($Render) { 'render' } else { '' }
+        $out = & $python $BrainScript $DbPath task-context $Query $projectArg $agentArg $Limit $questArg $mode 2>$null
+        if (-not $out) { throw 'task-context no devolvio salida' }
+        if ($Quiet) {
+            try { $json = $out | Out-String | ConvertFrom-Json; Write-Output ($json | ConvertTo-Json -Compress -Depth 8) }
+            catch { Write-Output $out }
+            exit 0
+        }
+        if ($Render) {
+            Write-Host $out
+        } else {
+            try {
+                $pkg = $out | Out-String | ConvertFrom-Json
+                Write-Host ('  [TASK_CONTEXT] v{0} | project={1} | conf={2} | hits={3}/{4}' -f `
+                    $pkg.version, $pkg.project, $pkg.CONFIDENCE, $pkg.stats.direct_hits, $pkg.stats.associations) -ForegroundColor Cyan
+                if ($pkg.FACTS) { Write-Host ('  FACTS: {0}' -f $pkg.FACTS.Count) -ForegroundColor White }
+                if ($pkg.RELEVANT_FILES) { Write-Host ('  RELEVANT_FILES: {0}' -f $pkg.RELEVANT_FILES.Count) -ForegroundColor White }
+                if ($pkg.RELATED_DATABASE) { Write-Host ('  RELATED_DATABASE: {0}' -f $pkg.RELATED_DATABASE.Count) -ForegroundColor White }
+                if ($pkg.KNOWN_DECISIONS) { Write-Host ('  KNOWN_DECISIONS: {0}' -f $pkg.KNOWN_DECISIONS.Count) -ForegroundColor Yellow }
+                if ($pkg.KNOWN_RISKS) { Write-Host ('  KNOWN_RISKS: {0}' -f $pkg.KNOWN_RISKS.Count) -ForegroundColor Red }
+                if ($pkg.STALE_INFORMATION) { Write-Host ('  STALE_INFORMATION: {0}' -f $pkg.STALE_INFORMATION.Count) -ForegroundColor DarkYellow }
+                if ($pkg.MISSING_INFORMATION) { Write-Host ('  MISSING: {0}' -f ($pkg.MISSING_INFORMATION | ConvertTo-Json -Compress)) -ForegroundColor Magenta }
+                if ($pkg.SEARCH_REQUIRED) { Write-Host ('  SEARCH_REQUIRED: {0} terminos' -f $pkg.SEARCH_REQUIRED.Count) -ForegroundColor Magenta }
+                Write-Host ('  estimated_tokens={0} trimmed={1}' -f $pkg.stats.estimated_tokens, $pkg.stats.trimmed) -ForegroundColor DarkGray
+            } catch {
+                Write-Host $out
+            }
         }
     }
     'agent' {
