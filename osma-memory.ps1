@@ -19,7 +19,7 @@ El cerebro del harness. Guarda, busca y exporta recuerdos de los agentes.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet('init', 'save', 'search', 'recall', 'context', 'task-context', 'agent', 'get', 'update', 'reinforce', 'verify', 'reconsolidate', 'suggest-topic', 'revisions', 'compact', 'consolidate', 'consolidate-recent', 'checkpoint', 'capsule', 'continuity', 'cognitive-compact', 'aquest', 'atask', 'backup', 'export', 'import', 'stats', 'quest', 'quests', 'edge', 'edges', 'skill', 'route', 'reviews', 'experience', 'episode', 'patterns', 'analyze', 'osma-stats')]
+    [ValidateSet('init', 'save', 'search', 'recall', 'context', 'task-context', 'agent', 'get', 'update', 'reinforce', 'verify', 'reconsolidate', 'suggest-topic', 'revisions', 'compact', 'consolidate', 'consolidate-recent', 'checkpoint', 'capsule', 'continuity', 'cognitive-compact', 'aquest', 'atask', 'backup', 'export', 'import', 'stats', 'quest', 'quests', 'edge', 'edges', 'skill', 'route', 'reviews', 'experience', 'episode', 'patterns', 'analyze', 'osma-stats', 'learning-loop')]
     [string]$Command
 
     ,[string]$Agent
@@ -75,6 +75,11 @@ param(
     ,[string]$InDir
     ,[switch]$Global  # Capa extra: memoria GLOBAL de patrones en home .config/arnes/osma-global.db
     ,[switch]$Render  # task-context: renderiza el paquete como texto en lugar de JSON
+    ,[string]$Discovered  # learning-loop: que se descubrio
+    ,[string]$Modified    # learning-loop: que se modifico
+    ,[string]$Verified    # learning-loop: que se verifico
+    ,[string]$PendingLoop # learning-loop: que quedo pendiente
+    ,[string]$Obsolete    # learning-loop: que quedo obsoleto
     # --- OSMA V5+ Experiencia (experience) ---
     ,[string]$Situation   # experience record: situacion / parte del recuerdo
     ,[string]$Reasoning   # experience record: razonamiento
@@ -158,7 +163,7 @@ function Invoke-Brain {
     param([string]$CommandName, [string]$JsonData = '')
     if ($JsonData) {
         $tmp = Join-Path $env:TEMP ("arnes-" + [guid]::NewGuid().ToString('N') + ".json")
-        Set-Content -Path $tmp -Value $JsonData -Encoding UTF8
+        [System.IO.File]::WriteAllText($tmp, [string]$JsonData, (New-Object System.Text.UTF8Encoding $false))
         try {
             $out = Get-Content $tmp -Raw | & $python $BrainScript $DbPath $CommandName "-" 2>$null
             return $out
@@ -173,7 +178,7 @@ switch ($Command) {
     'init' {
         $agentsJson = Get-KnownAgents | ConvertTo-Json -Depth 5 -Compress
         $tmp = Join-Path $env:TEMP ("arnes-init-" + [guid]::NewGuid().ToString('N') + ".json")
-        Set-Content -Path $tmp -Value $agentsJson -Encoding UTF8
+        [System.IO.File]::WriteAllText($tmp, [string]$agentsJson, (New-Object System.Text.UTF8Encoding $false))
         try {
             $out = Get-Content $tmp -Raw | & $python $BrainScript $DbPath init "-" 2>$null
             $stats = $out | Out-String | ConvertFrom-Json
@@ -216,7 +221,7 @@ switch ($Command) {
             } | ConvertTo-Json -Compress
         }
         $tmp = Join-Path $env:TEMP ("arnes-save-" + [guid]::NewGuid().ToString('N') + ".json")
-        Set-Content -Path $tmp -Value $data -Encoding UTF8
+        [System.IO.File]::WriteAllText($tmp, [string]$data, (New-Object System.Text.UTF8Encoding $false))
         try {
             $out = Get-Content $tmp -Raw | & $python $BrainScript $DbPath save "-" 2>$null
             $res = $out | Out-String | ConvertFrom-Json
@@ -240,7 +245,7 @@ switch ($Command) {
         if (-not $Content -and -not $Topic) { throw 'Falta -Content o -Topic' }
         $data = @{ id = $Id; content = $Content; topic_key = $Topic } | ConvertTo-Json -Compress
         $tmp = Join-Path $env:TEMP ("arnes-update-" + [guid]::NewGuid().ToString('N') + ".json")
-        Set-Content -Path $tmp -Value $data -Encoding UTF8
+        [System.IO.File]::WriteAllText($tmp, [string]$data, (New-Object System.Text.UTF8Encoding $false))
         try {
             $out = Get-Content $tmp -Raw | & $python $BrainScript $DbPath update "-" 2>$null
             $res = $out | Out-String | ConvertFrom-Json
@@ -267,7 +272,7 @@ switch ($Command) {
         if ($Id -le 0) { throw 'Falta -Id' }
         $data = @{ id = $Id; evidence = $Evidence; success = $true } | ConvertTo-Json -Compress
         $tmp = Join-Path $env:TEMP ("arnes-reinf-" + [guid]::NewGuid().ToString('N') + ".json")
-        Set-Content -Path $tmp -Value $data -Encoding UTF8
+        [System.IO.File]::WriteAllText($tmp, [string]$data, (New-Object System.Text.UTF8Encoding $false))
         try {
             $out = Get-Content $tmp -Raw | & $python $BrainScript $DbPath reinforce "-" 2>$null
             if (-not $Quiet) { Write-Host ("  [OK] Memoria {0} reforzada (storage/confianza subieron)" -f $Id) -ForegroundColor Green }
@@ -278,7 +283,7 @@ switch ($Command) {
         if (-not $Verdict) { $Verdict = 'PASS' }
         $data = @{ id = $Id; verdict = $Verdict; evidence = $Evidence } | ConvertTo-Json -Compress
         $tmp = Join-Path $env:TEMP ("arnes-verif-" + [guid]::NewGuid().ToString('N') + ".json")
-        Set-Content -Path $tmp -Value $data -Encoding UTF8
+        [System.IO.File]::WriteAllText($tmp, [string]$data, (New-Object System.Text.UTF8Encoding $false))
         try {
             $out = Get-Content $tmp -Raw | & $python $BrainScript $DbPath verify "-" 2>$null
             if (-not $Quiet) { Write-Host ("  [OK] Memoria {0} verificada: {1}" -f $Id, $Verdict) -ForegroundColor $(if ($Verdict -eq 'PASS') { 'Green' } else { 'Yellow' }) }
@@ -288,7 +293,7 @@ switch ($Command) {
         if ($Id -le 0 -or -not $Content) { throw 'Falta -Id y -Content (reconsolidate -Id 8 -Content "...")' }
         $data = @{ id = $Id; content = $Content; evidence = $Evidence } | ConvertTo-Json -Compress
         $tmp = Join-Path $env:TEMP ("arnes-recon-" + [guid]::NewGuid().ToString('N') + ".json")
-        Set-Content -Path $tmp -Value $data -Encoding UTF8
+        [System.IO.File]::WriteAllText($tmp, [string]$data, (New-Object System.Text.UTF8Encoding $false))
         try {
             $out = Get-Content $tmp -Raw | & $python $BrainScript $DbPath reconsolidate "-" 2>$null
             if (-not $Quiet) { Write-Host ("  [OK] Memoria {0} reconsolidada (revision guardada)" -f $Id) -ForegroundColor Green }
@@ -308,7 +313,7 @@ switch ($Command) {
         elseif ($SkillAction -eq 'register') {
             $data = @{ skill_id = $Skill; version = '1.0'; triggers = @() } | ConvertTo-Json -Compress
             $tmp = Join-Path $env:TEMP ("arnes-skill-" + [guid]::NewGuid().ToString('N') + ".json")
-            Set-Content -Path $tmp -Value $data -Encoding UTF8
+            [System.IO.File]::WriteAllText($tmp, [string]$data, (New-Object System.Text.UTF8Encoding $false))
             try {
                 $out = Get-Content $tmp -Raw | & $python $BrainScript $DbPath skill register "-" 2>$null
                 if (-not $Quiet) { Write-Host ("  [OK] Skill '{0}' registrada (new)" -f $Skill) -ForegroundColor Green }
@@ -318,7 +323,7 @@ switch ($Command) {
             $data = @{ skill_id = $Skill; version = '1.0'; agent = $Agent; quest_id = $QuestId;
                        success = $true; verdict = 'PASS'; evidence = $Evidence } | ConvertTo-Json -Compress
             $tmp = Join-Path $env:TEMP ("arnes-skillx-" + [guid]::NewGuid().ToString('N') + ".json")
-            Set-Content -Path $tmp -Value $data -Encoding UTF8
+            [System.IO.File]::WriteAllText($tmp, [string]$data, (New-Object System.Text.UTF8Encoding $false))
             try {
                 $out = Get-Content $tmp -Raw | & $python $BrainScript $DbPath skill exec "-" 2>$null
                 if ($Quiet) { Write-Output (($out | Out-String).Trim()); exit 0 }
@@ -381,7 +386,7 @@ switch ($Command) {
                 next_action = $NextAction; reason = 'manual'
             } | ConvertTo-Json -Depth 5 -Compress
             $tmp = Join-Path $env:TEMP ("arnes-cp-" + [guid]::NewGuid().ToString('N') + ".json")
-            Set-Content -Path $tmp -Value $data -Encoding UTF8
+            [System.IO.File]::WriteAllText($tmp, [string]$data, (New-Object System.Text.UTF8Encoding $false))
             try {
                 $out = Get-Content $tmp -Raw | & $python $BrainScript $DbPath checkpoint create "-" 2>$null
                 $res = $out | Out-String | ConvertFrom-Json
@@ -428,7 +433,7 @@ switch ($Command) {
             next_action = $NextAction; reason = 'cognitive-compact'
         } | ConvertTo-Json -Depth 5 -Compress
         $tmp = Join-Path $env:TEMP ("arnes-cc-" + [guid]::NewGuid().ToString('N') + ".json")
-        Set-Content -Path $tmp -Value $data -Encoding UTF8
+        [System.IO.File]::WriteAllText($tmp, [string]$data, (New-Object System.Text.UTF8Encoding $false))
         try {
             $out = Get-Content $tmp -Raw | & $python $BrainScript $DbPath checkpoint create "-" 2>$null
             $res = $out | Out-String | ConvertFrom-Json
@@ -541,6 +546,31 @@ switch ($Command) {
             }
         }
     }
+    'learning-loop' {
+        # #15 protocolo: despues de una tarea, ARGOS llama learning-loop con lo
+        # que se descubrio/modifico/verifico/queda pendiente/obsoleto.
+        $data = @{
+            quest_id  = $(if ($QuestId) { $QuestId } else { $null })
+            agent     = $(if ($Agent) { $Agent } else { $null })
+            discovered = $(if ($Discovered) { $Discovered } else { $null })
+            modified   = $(if ($Modified) { $Modified } else { $null })
+            verified   = $(if ($Verified) { $Verified } else { $null })
+            pending    = $(if ($PendingLoop) { $PendingLoop } else { $null })
+            obsolete   = $(if ($Obsolete) { $Obsolete } else { $null })
+            run_sleep  = $true
+            max_tokens_context = $Limit
+        } | ConvertTo-Json -Compress
+        $tmp = Join-Path $env:TEMP ("arnes-loop-" + [guid]::NewGuid().ToString('N') + ".json")
+        [System.IO.File]::WriteAllText($tmp, [string]$data, (New-Object System.Text.UTF8Encoding $false))
+        try {
+            $out = Get-Content $tmp -Raw | & $python $BrainScript $DbPath learning-loop "-" 2>$null
+            if ($Quiet) { Write-Output $out; exit 0 }
+            $res = $out | Out-String | ConvertFrom-Json
+            Write-Host ('  Learning loop: {0} memories guardadas' -f $res.saved.Count) -ForegroundColor Cyan
+            if ($res.quest_id) { Write-Host ('  Quest cerrada: {0}' -f $res.quest_id) -ForegroundColor Yellow }
+            if ($res.sleep) { Write-Host ('  Sleep: {0} dedup, {1} contradicciones' -f $res.sleep.deduped, $res.sleep.contradictions_detected) -ForegroundColor DarkGray }
+        } finally { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
+    }
     'agent' {
         if (-not $Agent) { throw 'Falta -Agent' }
         $out = & $python $BrainScript $DbPath agent $Agent $Limit 2>$null
@@ -582,7 +612,7 @@ switch ($Command) {
     'quest' {
         if (-not $Json) { throw 'Falta -Json (JSON con datos del quest)' }
         $tmp = Join-Path $env:TEMP ("arnes-quest-" + [guid]::NewGuid().ToString('N') + ".json")
-        Set-Content -Path $tmp -Value $Json -Encoding UTF8
+        [System.IO.File]::WriteAllText($tmp, [string]$Json, (New-Object System.Text.UTF8Encoding $false))
         try {
             $out = Get-Content $tmp -Raw | & $python $BrainScript $DbPath quest "-" 2>$null
             Write-Host ("  [OK] Quest registrado: {0}" -f ($out | Out-String).Trim()) -ForegroundColor Green
@@ -601,7 +631,7 @@ switch ($Command) {
         if ($Create -and $QuestId) {
             $data = @{ id = $QuestId; description = $Goal; mode = $Phase } | ConvertTo-Json -Compress
             $tmp = Join-Path $env:TEMP ("arnes-aq-" + [guid]::NewGuid().ToString('N') + ".json")
-            Set-Content $tmp $data -Encoding UTF8
+            [System.IO.File]::WriteAllText($tmp, [string]$data, (New-Object System.Text.UTF8Encoding $false))
             try { $out = Get-Content $tmp -Raw | & $python $BrainScript $DbPath aquest create "-" 2>$null; if (-not $Quiet) { Write-Host ("  [OK] Quest autonoma: {0}" -f (($out | Out-String).Trim())) -ForegroundColor Green } } finally { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
             exit 0
         }
@@ -625,7 +655,7 @@ switch ($Command) {
         if ($Create -and $QuestId -and $TaskId -and $Agent -and $Content) {
             $data = @{ quest_id = $QuestId; task_id = $TaskId; description = $Content; agent = $Agent; dependencies = @($TaskDeps); acceptance = $Acceptance } | ConvertTo-Json -Compress
             $tmp = Join-Path $env:TEMP ("arnes-at-" + [guid]::NewGuid().ToString('N') + ".json")
-            Set-Content $tmp $data -Encoding UTF8
+            [System.IO.File]::WriteAllText($tmp, [string]$data, (New-Object System.Text.UTF8Encoding $false))
             try { $out = Get-Content $tmp -Raw | & $python $BrainScript $DbPath atask create "-" 2>$null; if (-not $Quiet) { Write-Host ("  [OK] Tarea creada: {0} -> {1}" -f $TaskId, $Agent) -ForegroundColor Green } } finally { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
             exit 0
         }
@@ -639,7 +669,7 @@ switch ($Command) {
         if ($Id -gt 0 -and ($Status -or $Summary)) {
             $data = @{ id = $Id; status = $Status; summary = $Summary; blockers = @($Blockers); evidence = $Evidence; attempts = $Attempts; model = $Skill; tokens_used = $TokensUsed } | ConvertTo-Json -Compress
             $tmp = Join-Path $env:TEMP ("arnes-atup-" + [guid]::NewGuid().ToString('N') + ".json")
-            Set-Content $tmp $data -Encoding UTF8
+            [System.IO.File]::WriteAllText($tmp, [string]$data, (New-Object System.Text.UTF8Encoding $false))
             try { $out = Get-Content $tmp -Raw | & $python $BrainScript $DbPath atask update "-" 2>$null; if (-not $Quiet) { Write-Host ("  [OK] Tarea {0} -> {1}" -f $Id, $Status) -ForegroundColor Green } } finally { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
             exit 0
         }
@@ -648,7 +678,7 @@ switch ($Command) {
     'edge' {
         if (-not $Json) { throw 'Falta -Json (JSON con node_a, node_b, relation)' }
         $tmp = Join-Path $env:TEMP ("arnes-edge-" + [guid]::NewGuid().ToString('N') + ".json")
-        Set-Content -Path $tmp -Value $Json -Encoding UTF8
+        [System.IO.File]::WriteAllText($tmp, [string]$Json, (New-Object System.Text.UTF8Encoding $false))
         try {
             $out = Get-Content $tmp -Raw | & $python $BrainScript $DbPath edge "-" 2>$null
             Write-Host ("  [OK] Edge registrado: {0}" -f ($out | Out-String).Trim()) -ForegroundColor Green
@@ -681,7 +711,7 @@ switch ($Command) {
                 quest_id = $(if ($QuestId) { $QuestId } else { $null })
             } | ConvertTo-Json -Compress
             $tmp = Join-Path $env:TEMP ("arnes-exp-" + [guid]::NewGuid().ToString('N') + ".json")
-            Set-Content $tmp $data -Encoding UTF8
+            [System.IO.File]::WriteAllText($tmp, [string]$data, (New-Object System.Text.UTF8Encoding $false))
             try {
                 $out = Get-Content $tmp -Raw | & $python $BrainScript $DbPath osma-experience-record "-" 2>$null
                 $res = $out | Out-String | ConvertFrom-Json
@@ -710,7 +740,7 @@ switch ($Command) {
             if (-not $Cues) { throw 'experience cues: falta -Cues (comma-separated)' }
             $data = @{ cues = @($Cues -split ',') ; project = $(if ($Project) { $Project } else { $null }); agent = $(if ($Agent) { $Agent } else { $null }) } | ConvertTo-Json -Compress
             $tmp = Join-Path $env:TEMP ("arnes-cue-" + [guid]::NewGuid().ToString('N') + ".json")
-            Set-Content $tmp $data -Encoding UTF8
+            [System.IO.File]::WriteAllText($tmp, [string]$data, (New-Object System.Text.UTF8Encoding $false))
             try {
                 $out = Get-Content $tmp -Raw | & $python $BrainScript $DbPath osma-cue-search "-" 2>$null
                 $res = $out | Out-String | ConvertFrom-Json
@@ -744,7 +774,7 @@ switch ($Command) {
             if (-not $Id -or -not $Reward) { throw 'experience validate: falta -Id y -Reward' }
             $data = @{ experience_id = $Id; reward = $Reward; result = $(if ($Outcome) { $Outcome } else { $null }) } | ConvertTo-Json -Compress
             $tmp = Join-Path $env:TEMP ("arnes-exv-" + [guid]::NewGuid().ToString('N') + ".json")
-            Set-Content $tmp $data -Encoding UTF8
+            [System.IO.File]::WriteAllText($tmp, [string]$data, (New-Object System.Text.UTF8Encoding $false))
             try {
                 $out = Get-Content $tmp -Raw | & $python $BrainScript $DbPath osma-experience-validate "-" 2>$null
                 $res = $out | Out-String | ConvertFrom-Json
@@ -767,7 +797,7 @@ switch ($Command) {
         if ($Id -le 0) { throw 'episode: falta -Id (experience_id)' }
         $data = @{ experience_id = $Id } | ConvertTo-Json -Compress
         $tmp = Join-Path $env:TEMP ("arnes-ep-" + [guid]::NewGuid().ToString('N') + ".json")
-        Set-Content $tmp $data -Encoding UTF8
+        [System.IO.File]::WriteAllText($tmp, [string]$data, (New-Object System.Text.UTF8Encoding $false))
         try {
             $out = Get-Content $tmp -Raw | & $python $BrainScript $DbPath osma-episode "-" 2>$null
             $e = $out | Out-String | ConvertFrom-Json

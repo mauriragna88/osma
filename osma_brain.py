@@ -3584,6 +3584,69 @@ class OsmaBrain:
             "db_size_bytes": os.path.getsize(self.db_path),
         }
 
+    # ---------- OSMA #15: LEARNING LOOP (aprendizaje acumulativo post-tarea) ----------
+    # Despues de una tarea, ARGOS llama a learning_loop() y OSMA actualiza:
+    #   1) que se descubrio      -> observation type=discovery
+    #   2) que se modifico       -> observation type=action
+    #   3) que se verifico       -> observation type=verdict
+    #   4) que quedo pendiente   -> observation type=action (flag pendiente en tags)
+    #   5) que quedo obsoleto    -> observation con tag obsoleto (para que sleep la marque)
+    # Ademas cierra la quest (si viene quest_id) y consolida con osma_sleep().
+    def learning_loop(self, quest_id=None, agent=None, discovered=None, modified=None,
+                      verified=None, pending=None, obsolete=None, run_sleep=True,
+                      max_tokens_context=6000):
+        saved = []
+        if discovered:
+            oid = self.save_observation(
+                agent or "atlas", (quest_id or "loop") + "/discovered", "discovery",
+                discovered, quest_id=quest_id, score=4, confidence=0.6, source="learning-loop",
+                tags=["learning-loop", "discovered"])
+            saved.append(oid)
+        if modified:
+            oid = self.save_observation(
+                agent or "atlas", (quest_id or "loop") + "/modified", "action",
+                modified, quest_id=quest_id, score=3, confidence=0.7, source="learning-loop",
+                tags=["learning-loop", "modified"])
+            saved.append(oid)
+        if verified:
+            oid = self.save_observation(
+                agent or "atlas", (quest_id or "loop") + "/verified", "verdict",
+                verified, quest_id=quest_id, score=4, confidence=0.85, source="learning-loop",
+                tags=["learning-loop", "verified"])
+            saved.append(oid)
+        if pending:
+            oid = self.save_observation(
+                agent or "atlas", (quest_id or "loop") + "/pending", "action",
+                pending, quest_id=quest_id, score=2, confidence=0.5, source="learning-loop",
+                tags=["learning-loop", "pending"])
+            saved.append(oid)
+        if obsolete:
+            oid = self.save_observation(
+                agent or "atlas", (quest_id or "loop") + "/obsolete", "discovery",
+                obsolete, quest_id=quest_id, score=2, confidence=0.5, source="learning-loop",
+                tags=["learning-loop", "obsolete"])
+            saved.append(oid)
+
+        # cierre de quest: marcar tasks pendientes que ya no aplican y quest como done
+        if quest_id and self.quest_get(quest_id):
+            for t in self.task_list(quest_id):
+                if t["status"] in ("pending", "ready"):
+                    self.task_update(t["id"], status="pass",
+                                     summary="cerrada por learning_loop (no ejecutada)")
+            self.quest_update(quest_id, status="done", progress=self.quest_progress(quest_id))
+
+        # consolidacion opcional: 'el sueno' (dedup, decay, contradicciones, links)
+        sleep_stats = {}
+        if run_sleep:
+            sleep_stats = self.osma_sleep(hours=24)
+
+        return {
+            "saved": saved,
+            "quest_id": quest_id,
+            "sleep": sleep_stats,
+            "context_tokens_est": max_tokens_context,
+        }
+
     def close(self):
         """Cierra la conexion SQLite. Idempotente: puede llamarse varias veces sin error."""
         conn = getattr(self, "_conn", None)
@@ -3607,10 +3670,75 @@ def _read_json_arg(raw):
     if raw and raw != "-":
         return json.loads(raw)
     # Leer de stdin (pipe desde PowerShell evita problemas de escaping)
-    data = sys.stdin.read().strip()
+    data = sys.stdin.read().lstrip("\ufeff").strip()  # PowerShell 5.1 antepone BOM al canalizar
     if not data:
         return {}
     return json.loads(data)
+
+
+def ensure_argos_link(db_path, project=None, config=None, agents=None):
+    """HOOK de auto-inicializacion (regla 'siempre ligado a ARGOS').
+
+    Antes de crear OsmaBrain, garantiza que exista el entorno ARGOS:
+      - .arnes/arnes.db        (lo crea OsmaBrain al abrir)
+      - .arnes/project.json    (perfil del proyecto)
+      - .arnes/config.json     (config: player/Atlas + codename argos)
+      - .arnes/memory/export/  (exports JSONL por agente)
+
+    Devuelve True si creo algo (primer arranque) o False si ya estaba listo.
+    Overridable por env: ARNES_SKIP_AUTOINIT=1 desactiva el hook (tests/CI).
+    """
+    if os.environ.get("ARNES_SKIP_AUTOINIT") == "1":
+        return False
+
+    arnes_dir = os.path.dirname(os.path.abspath(db_path))
+    os.makedirs(arnes_dir, exist_ok=True)
+    os.makedirs(os.path.join(arnes_dir, "memory", "export"), exist_ok=True)
+
+    created = False
+    # project.json — perfil del proyecto (reusa el de project-type si existe)
+    proj_path = os.path.join(arnes_dir, "project.json")
+    if not os.path.exists(proj_path):
+        git = {"branch": "main", "last_commit": "", "remote": ""}
+        try:
+            r = os.system("git rev-parse --abbrev-ref HEAD")
+            if r == 0:
+                git["branch"] = __import__("subprocess").check_output(
+                    ["git", "rev-parse", "--abbrev-ref", "HEAD"]).decode().strip()
+                git["last_commit"] = __import__("subprocess").check_output(
+                    ["git", "rev-parse", "HEAD"]).decode().strip()[:7]
+                git["remote"] = __import__("subprocess").check_output(
+                    ["git", "config", "--get", "remote.origin.url"]).decode().strip()
+        except Exception:
+            pass
+        proj = project or os.path.basename(os.path.dirname(arnes_dir)) or "project"
+        payload = {
+            "name": proj,
+            "path": os.path.dirname(arnes_dir),
+            "created_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "updated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "git": git,
+            "stack": [],
+            "stats": {"memory_observations": 0, "files": 0, "quests": 0},
+        }
+        with open(proj_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=4)
+        created = True
+
+    # config.json — player/Atlas + codename argos (solo si no existe)
+    cfg_path = os.path.join(arnes_dir, "config.json")
+    if not os.path.exists(cfg_path):
+        cfg = config or {
+            "player": {"name": "Atlas", "tagline": "Rojo y Negro como el Atlas de la Liga MX",
+                        "role": "Player / Orchestrator"},
+            "version": "1.0.0",
+            "codename": "argos",
+        }
+        with open(cfg_path, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=4)
+        created = True
+
+    return created
 
 
 def main():
@@ -3620,6 +3748,13 @@ def main():
         sys.exit(1)
 
     db_path, command = sys.argv[1], sys.argv[2]
+    # Auto-init: garantiza que OSMA quede ligado al entorno ARGOS (crea
+    # project.json/config.json si faltan). No aplica a 'init' (ya lo hace).
+    if command != "init":
+        try:
+            ensure_argos_link(db_path)
+        except Exception:
+            pass  # el hook es best-effort: nunca debe romper la CLI
     brain = None
     try:
         brain = OsmaBrain(db_path)
@@ -3965,6 +4100,20 @@ def _dispatch(brain, command):
         data = _read_json_arg(sys.argv[3] if len(sys.argv) > 3 else "-")
         print(json.dumps(brain.osma_consolidation_finalize(int(data.get("id", 0)), data.get("summary", "")),
                          ensure_ascii=False))
+
+    elif command == "learning-loop":
+        data = _read_json_arg(sys.argv[3] if len(sys.argv) > 3 else "-")
+        res = brain.learning_loop(
+            quest_id=data.get("quest_id"),
+            agent=data.get("agent"),
+            discovered=data.get("discovered"),
+            modified=data.get("modified"),
+            verified=data.get("verified"),
+            pending=data.get("pending"),
+            obsolete=data.get("obsolete"),
+            run_sleep=bool(data.get("run_sleep", True)),
+            max_tokens_context=int(data.get("max_tokens_context", 6000)))
+        print(json.dumps(res, ensure_ascii=False, default=str))
 
     elif command == "osma-stats":
         # Summary V4-V7 del cerebro OSMA construido por UN metodo defensivo:
